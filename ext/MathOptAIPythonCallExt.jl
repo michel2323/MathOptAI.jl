@@ -26,9 +26,12 @@ Convert a trained neural network from PyTorch via PythonCall.jl to a
 ## Supported layers
 
  * `nn.AvgPool2d`
+ * `nn.BatchNorm2d`
  * `nn.Conv2d`
+ * `nn.ConvTranspose2d`
  * `nn.Dropout`
  * `nn.Flatten`
+ * `nn.Identity`
  * `nn.GELU`
  * `nn.LayerNorm`
  * `nn.LeakyReLU`
@@ -154,16 +157,67 @@ function MathOptAI.build_predictor(
             padding = _to_tuple(layer.padding),
             stride = _to_tuple(layer.stride),
         )
+    elseif _is_instance(layer, nn.BatchNorm2d)
+        # At eval time, BatchNorm2d is a per-channel affine transform:
+        #   y = (x - running_mean) / sqrt(running_var + eps) * weight + bias
+        input_size = _normalize_input_size("nn.BatchNorm2d", input_size)
+        H, W, C = input_size
+        eps = PythonCall.pyconvert(Float64, layer.eps)
+        running_mean = _pyconvert(Vector{Float64}, layer.running_mean)
+        running_var = _pyconvert(Vector{Float64}, layer.running_var)
+        weight = if Bool(layer.affine)
+            _pyconvert(Vector{Float64}, layer.weight)
+        else
+            ones(Float64, C)
+        end
+        bias = if Bool(layer.affine)
+            _pyconvert(Vector{Float64}, layer.bias)
+        else
+            zeros(Float64, C)
+        end
+        # Compute combined per-channel scale and bias
+        channel_scale = weight ./ sqrt.(running_var .+ eps)
+        channel_bias = bias .- running_mean .* channel_scale
+        return MathOptAI.ReducedSpace(
+            MathOptAI.BatchNorm2d(channel_scale, channel_bias; input_size),
+        )
     elseif _is_instance(layer, nn.Conv2d)
         w = _pyconvert(Array{Float64,4}, layer.weight)
         w = reverse(permutedims(w, (3, 4, 2, 1)); dims = (1, 2))
-        input_size = _normalize_input_size("nn.MaxPool2d", input_size)
+        input_size = _normalize_input_size("nn.Conv2d", input_size)
+        bias = if !PythonCall.pyis(layer.bias, PythonCall.pybuiltins.None)
+            _pyconvert(Vector{Float64}, layer.bias)
+        else
+            zeros(Float64, size(w, 4))
+        end
         return MathOptAI.Conv2d(
             w,
-            _pyconvert(Vector{Float64}, layer.bias);
+            bias;
             input_size,
             padding = _to_tuple(layer.padding),
             stride = _to_tuple(layer.stride),
+        )
+    elseif _is_instance(layer, nn.ConvTranspose2d)
+        # PyTorch ConvTranspose2d weight shape: (Cin, Cout, kH, kW)
+        w = _pyconvert(Array{Float64,4}, layer.weight)
+        # permutedims to (kH, kW, Cout, Cin) — no kernel flip needed
+        # (unlike Conv2d, transposed convolution uses the kernel as-is)
+        w = permutedims(w, (3, 4, 2, 1))
+        input_size = _normalize_input_size("nn.ConvTranspose2d", input_size)
+        bias = if Bool(PythonCall.pybuiltins.hasattr(layer, "bias")) &&
+                  !PythonCall.pyis(layer.bias, PythonCall.pybuiltins.None)
+            _pyconvert(Vector{Float64}, layer.bias)
+        else
+            Cout = size(w, 3)
+            zeros(Float64, Cout)
+        end
+        return MathOptAI.ConvTranspose2d(
+            w,
+            bias;
+            input_size,
+            padding = _to_tuple(layer.padding),
+            stride = _to_tuple(layer.stride),
+            output_padding = _to_tuple(layer.output_padding),
         )
     elseif _is_instance(layer, nn.Flatten)
         input_size = _normalize_input_size("nn.Flatten", input_size)
@@ -220,6 +274,10 @@ function MathOptAI.build_predictor(
         return get(config, :SoftPlus, MathOptAI.SoftPlus)(; beta)
     elseif _is_instance(layer, nn.Tanh)
         return get(config, :Tanh, MathOptAI.Tanh)()
+    elseif _is_instance(layer, nn.Identity)
+        # Identity is a no-op: y = x. Use a trivial permutation in reduced space.
+        n = input_size === nothing ? 0 : prod(input_size)
+        return MathOptAI.ReducedSpace(MathOptAI.Permutation(collect(1:n)))
     elseif haskey(config, layer.__class__)
         return config[layer.__class__](layer; input_size, config, nn)
     end
