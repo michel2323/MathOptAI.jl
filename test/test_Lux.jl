@@ -300,6 +300,64 @@ function test_unsupported_activation()
     return
 end
 
+function test_SkipConnection()
+    rng = Random.MersenneTwister()
+    Random.seed!(rng, 12345)
+    chain = Lux.Chain(
+        Lux.Dense(2 => 2),
+        Lux.SkipConnection(Lux.Dense(2 => 2, Lux.relu), +),
+        Lux.Dense(2 => 1),
+    )
+    parameters, state = Lux.setup(rng, chain)
+    predictor = MathOptAI.build_predictor(
+        (chain, parameters, state);
+        config = Dict(Lux.relu => MathOptAI.ReLU),
+    )
+    @test predictor isa MathOptAI.Pipeline
+    @test predictor.layers[2] isa MathOptAI.SkipConnection
+    model = Model(Ipopt.Optimizer)
+    set_silent(model)
+    @variable(model, x[1:2])
+    fix.(x, [1.0, 2.0])
+    y, _ = MathOptAI.add_predictor(model, predictor, x)
+    optimize!(model)
+    @test is_solved_and_feasible(model)
+    y_expected, _ = Lux.apply(chain, Float32[1.0, 2.0], parameters, state)
+    @test isapprox(value.(y), y_expected; atol = 1e-4)
+    return
+end
+
+function test_SkipConnection_chain_inner()
+    rng = Random.MersenneTwister()
+    Random.seed!(rng, 12345)
+    chain = Lux.Chain(
+        Lux.Dense(2 => 2),
+        Lux.SkipConnection(
+            Lux.Chain(Lux.Dense(2 => 2, Lux.relu), Lux.Dense(2 => 2)),
+            +,
+        ),
+        Lux.Dense(2 => 1),
+    )
+    parameters, state = Lux.setup(rng, chain)
+    predictor = MathOptAI.build_predictor(
+        (chain, parameters, state);
+        config = Dict(Lux.relu => MathOptAI.ReLU),
+    )
+    @test predictor isa MathOptAI.Pipeline
+    @test predictor.layers[2] isa MathOptAI.SkipConnection
+    @test predictor.layers[2].inner isa MathOptAI.Pipeline
+    model = Model(Ipopt.Optimizer)
+    set_silent(model)
+    @variable(model, x[1:2])
+    fix.(x, [1.0, 2.0])
+    y, _ = MathOptAI.add_predictor(model, predictor, x)
+    optimize!(model)
+    @test is_solved_and_feasible(model)
+    y_expected, _ = Lux.apply(chain, Float32[1.0, 2.0], parameters, state)
+    @test isapprox(value.(y), y_expected; atol = 1e-4)
+    return
+end
+
 end  # module
 
 TestLuxExt.runtests()

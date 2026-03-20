@@ -303,6 +303,28 @@ function _build_predictor(
     return MathOptAI.output_size(p, input_size_normalized)
 end
 
+function _build_predictor(
+    predictor::MathOptAI.Pipeline,
+    layer::Flux.SkipConnection,
+    config::Dict,
+    input_size::Any,
+)
+    if layer.connection !== (+)
+        error(
+            "MathOptAI only supports SkipConnection with `+` connection, " *
+            "got: $(layer.connection)",
+        )
+    end
+    inner_chain =
+        layer.layers isa Flux.Chain ? layer.layers : Flux.Chain(layer.layers)
+    inner = MathOptAI.build_predictor(inner_chain; config)
+    inner_predictor =
+        length(inner.layers) == 1 ? only(inner.layers) : inner
+    p = MathOptAI.SkipConnection(inner_predictor)
+    push!(predictor.layers, p)
+    return MathOptAI.output_size(p, input_size)
+end
+
 function _construct_hessian(chain, input_dimension, output_dimension)
     # We need to compute only ∇²f(x) because the -y part does not appear in
     # the Hessian.

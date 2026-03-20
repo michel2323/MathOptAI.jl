@@ -172,4 +172,30 @@ function _build_predictor(
     return
 end
 
+function _build_predictor(
+    predictor::MathOptAI.Pipeline,
+    layer::Lux.SkipConnection,
+    p::Any,
+    config::Dict,
+)
+    if layer.connection !== (+)
+        error(
+            "MathOptAI only supports SkipConnection with `+` connection, " *
+            "got: $(layer.connection)",
+        )
+    end
+    inner = MathOptAI.Pipeline(MathOptAI.AbstractPredictor[])
+    if layer.layers isa Lux.Chain
+        for (l, param) in zip(layer.layers.layers, p)
+            _build_predictor(inner, l, param, config)
+        end
+    else
+        _build_predictor(inner, layer.layers, p, config)
+    end
+    inner_predictor =
+        length(inner.layers) == 1 ? only(inner.layers) : inner
+    push!(predictor.layers, MathOptAI.SkipConnection(inner_predictor))
+    return
+end
+
 end  # module MathOptAILuxExt

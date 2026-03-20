@@ -507,6 +507,58 @@ function test_flux_LayerNorm_affine_false()
     return
 end
 
+function test_SkipConnection()
+    Random.seed!(12345)
+    chain = Flux.Chain(
+        Flux.Dense(2 => 2),
+        Flux.SkipConnection(Flux.Dense(2 => 2, Flux.relu), +),
+        Flux.Dense(2 => 1),
+    )
+    predictor = MathOptAI.build_predictor(
+        chain;
+        config = Dict(Flux.relu => MathOptAI.ReLU),
+    )
+    @test predictor isa MathOptAI.Pipeline
+    @test predictor.layers[2] isa MathOptAI.SkipConnection
+    model = Model(Ipopt.Optimizer)
+    set_silent(model)
+    @variable(model, x[1:2])
+    fix.(x, [1.0, 2.0])
+    y, _ = MathOptAI.add_predictor(model, predictor, x)
+    optimize!(model)
+    @test is_solved_and_feasible(model)
+    @test isapprox(value.(y), chain(Float32[1.0, 2.0]); atol = 1e-4)
+    return
+end
+
+function test_SkipConnection_chain_inner()
+    Random.seed!(12345)
+    chain = Flux.Chain(
+        Flux.Dense(2 => 2),
+        Flux.SkipConnection(
+            Flux.Chain(Flux.Dense(2 => 2, Flux.relu), Flux.Dense(2 => 2)),
+            +,
+        ),
+        Flux.Dense(2 => 1),
+    )
+    predictor = MathOptAI.build_predictor(
+        chain;
+        config = Dict(Flux.relu => MathOptAI.ReLU),
+    )
+    @test predictor isa MathOptAI.Pipeline
+    @test predictor.layers[2] isa MathOptAI.SkipConnection
+    @test predictor.layers[2].inner isa MathOptAI.Pipeline
+    model = Model(Ipopt.Optimizer)
+    set_silent(model)
+    @variable(model, x[1:2])
+    fix.(x, [1.0, 2.0])
+    y, _ = MathOptAI.add_predictor(model, predictor, x)
+    optimize!(model)
+    @test is_solved_and_feasible(model)
+    @test isapprox(value.(y), chain(Float32[1.0, 2.0]); atol = 1e-4)
+    return
+end
+
 end  # module
 
 TestFluxExt.runtests()

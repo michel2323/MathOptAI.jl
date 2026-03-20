@@ -961,6 +961,79 @@ function test_add_predictor_kwarg_err()
     return
 end
 
+function test_SkipConnection()
+    model = Model(Ipopt.Optimizer)
+    set_silent(model)
+    @variable(model, x[1:2])
+    inner = MathOptAI.Affine([1.0 0.0; 0.0 1.0], [0.1, 0.2])
+    f = MathOptAI.SkipConnection(inner)
+    @test MathOptAI.output_size(f, (2,)) == (2,)
+    y, formulation = MathOptAI.add_predictor(model, f, x)
+    @test length(y) == 2
+    @objective(model, Min, sum(y))
+    fix.(x, [1.0, 2.0])
+    optimize!(model)
+    @assert is_solved_and_feasible(model)
+    # y = (Ax + b) + x = x + [0.1, 0.2] + x = 2x + [0.1, 0.2]
+    @test value.(y) ≈ [2.1, 4.2]
+    return
+end
+
+function test_SkipConnection_reduced_space()
+    model = Model(Ipopt.Optimizer)
+    set_silent(model)
+    @variable(model, x[1:2])
+    inner = MathOptAI.Affine([1.0 0.0; 0.0 1.0], [0.1, 0.2])
+    f = MathOptAI.ReducedSpace(MathOptAI.SkipConnection(inner))
+    y, formulation = MathOptAI.add_predictor(model, f, x)
+    @test length(y) == 2
+    @test num_variables(model) == 2
+    @objective(model, Min, sum(y))
+    fix.(x, [1.0, 2.0])
+    optimize!(model)
+    @assert is_solved_and_feasible(model)
+    @test value.(y) ≈ [2.1, 4.2]
+    return
+end
+
+function test_SkipConnection_in_Pipeline()
+    model = Model(Ipopt.Optimizer)
+    set_silent(model)
+    @variable(model, x[1:2])
+    f = MathOptAI.Pipeline(
+        MathOptAI.SkipConnection(
+            MathOptAI.Pipeline(
+                MathOptAI.Affine([1.0 0.0; 0.0 1.0], [0.1, 0.2]),
+                MathOptAI.ReLU(),
+            ),
+        ),
+        MathOptAI.Affine([1.0 1.0], [0.0]),
+    )
+    y, formulation = MathOptAI.add_predictor(model, f, x)
+    @test length(y) == 1
+    @objective(model, Min, sum(y))
+    fix.(x, [1.0, 2.0])
+    optimize!(model)
+    @assert is_solved_and_feasible(model)
+    # inner: relu([1 0; 0 1]*x + [0.1, 0.2]) = relu(x + [0.1, 0.2])
+    # skip: relu(x + [0.1, 0.2]) + x = [1.1, 2.2] + [1, 2] = [2.1, 4.2]
+    # final: [1 1]*[2.1, 4.2] + 0 = 6.3
+    @test value.(y) ≈ [6.3] atol = 1e-6
+    return
+end
+
+function test_SkipConnection_dimension_mismatch()
+    model = Model()
+    @variable(model, x[1:2])
+    inner = MathOptAI.Affine([1.0 2.0], [0.0])  # 2 -> 1
+    f = MathOptAI.SkipConnection(inner)
+    @test_throws(
+        ErrorException,
+        MathOptAI.add_predictor(model, f, x),
+    )
+    return
+end
+
 end  # module
 
 TestPredictors.runtests()

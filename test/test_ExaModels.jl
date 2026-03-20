@@ -531,6 +531,63 @@ function test_flux_end_to_end()
     return
 end
 
+function test_SkipConnection_structure()
+    inner = MathOptAI.Affine([1.0 0.0; 0.0 1.0], [0.1, 0.2])
+    p = MathOptAI.SkipConnection(inner)
+    core, x = _make_core_with_input(2)
+    y, form = MathOptAI.add_predictor(core, p, x)
+    m = ExaModels.ExaModel(core)
+    # 2 input + 2 affine + 2 skip = 6
+    @test m.meta.nvar == 6
+    # 2 affine + 2 skip = 4
+    @test m.meta.ncon == 4
+    @test form isa MathOptAI.Formulation
+    @test form.predictor === p
+    return
+end
+
+function test_SkipConnection_AbstractVector()
+    inner = MathOptAI.Affine([1.0 0.0; 0.0 1.0], [0.1, 0.2])
+    p = MathOptAI.SkipConnection(inner)
+    core, x = _make_core_with_input(2)
+    y, form = MathOptAI.add_predictor(core, p, [x[i] for i in 1:2])
+    m = ExaModels.ExaModel(core)
+    @test m.meta.nvar == 6
+    @test m.meta.ncon == 4
+    @test form isa MathOptAI.Formulation
+    @test form.predictor === p
+    return
+end
+
+function test_ReducedSpace_SkipConnection_structure()
+    inner = MathOptAI.Affine([1.0 0.0; 0.0 1.0], [0.1, 0.2])
+    p = MathOptAI.ReducedSpace(MathOptAI.SkipConnection(inner))
+    core, x = _make_core_with_input(2)
+    y, form = MathOptAI.add_predictor(core, p, x)
+    @test length(y) == 2
+    @test form.predictor isa MathOptAI.ReducedSpace{<:MathOptAI.SkipConnection}
+    m = ExaModels.ExaModel(core)
+    @test m.meta.nvar == 2
+    @test m.meta.ncon == 0
+    return
+end
+
+function test_SkipConnection_solve()
+    inner = MathOptAI.Affine([1.0 0.0; 0.0 1.0], [0.1, 0.2])
+    p = MathOptAI.SkipConnection(inner)
+    core = ExaModels.ExaCore()
+    b = [1.0, 2.0]
+    x = ExaModels.variable(core, 2; lvar = b, uvar = b)
+    y, _ = MathOptAI.add_predictor(core, p, x)
+    ExaModels.objective(core, y[i] for i in 1:2)
+    model = ExaModels.ExaModel(core)
+    result = NLPModelsIpopt.ipopt(model; print_level = 0)
+    @test result.status ∈ (:first_order, :acceptable)
+    # y = (Ax + b) + x = 2x + [0.1, 0.2]
+    @test isapprox(ExaModels.solution(result, y), [2.1, 4.2]; atol = 1e-6)
+    return
+end
+
 end  # module
 
 TestExaModelsExt.runtests()
