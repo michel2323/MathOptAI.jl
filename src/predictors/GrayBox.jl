@@ -62,6 +62,38 @@ struct GrayBox{P} <: AbstractPredictor
     end
 end
 
+"""
+    graybox_output_dim(predictor, n_input::Int) -> Int
+
+Return the number of outputs for a gray-box predictor given `n_input` inputs.
+Must be implemented by concrete predictor types used with [`GrayBox`](@ref).
+"""
+function graybox_output_dim end
+
+"""
+    graybox_eval!(y, predictor, x)
+
+Evaluate the gray-box predictor: `y .= f(x)`.
+Must be implemented by concrete predictor types used with [`GrayBox`](@ref).
+"""
+function graybox_eval! end
+
+"""
+    graybox_vjp!(Jtv, predictor, x, w)
+
+Compute the vector-Jacobian product: `Jtv .= J(x)' * w`.
+Must be implemented by concrete predictor types used with [`GrayBox`](@ref).
+"""
+function graybox_vjp! end
+
+"""
+    graybox_jvp!(Jv, predictor, x, v)
+
+Compute the Jacobian-vector product: `Jv .= J(x) * v`.
+Must be implemented by concrete predictor types used with [`GrayBox`](@ref).
+"""
+function graybox_jvp! end
+
 function add_predictor(model::JuMP.AbstractModel, predictor::GrayBox, x::Vector)
     set = MOI.VectorNonlinearOracle(predictor, length(x))
     y = add_variables(model, x, set.output_dimension, "moai_GrayBox")
